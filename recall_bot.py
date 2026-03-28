@@ -62,23 +62,23 @@ class RecallBot:
             },
         }
 
-        # ── Avatar mode: stream webpage as bot camera ─────────────────────────
+        # ── Audio always via Recall's native API (no jitter) ─────────────────
+        payload["automatic_audio_output"] = {
+            "in_call_recording": {
+                "data": {
+                    "kind":     "mp3",
+                    "b64_data": SILENT_MP3_B64
+                }
+            }
+        }
+
+        # ── Avatar mode: ALSO stream webpage as bot camera (visual only) ──────
         if avatar_url:
             payload["output_media"] = {
                 "camera": {
                     "kind": "webpage",
                     "config": {
                         "url": avatar_url
-                    }
-                }
-            }
-        else:
-            # ── Fallback: audio-only mode (original behavior) ─────────────────
-            payload["automatic_audio_output"] = {
-                "in_call_recording": {
-                    "data": {
-                        "kind":     "mp3",
-                        "b64_data": SILENT_MP3_B64
                     }
                 }
             }
