@@ -1,0 +1,386 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  background: #1a1a2e;
+  width: 100vw;
+  height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  font-family: -apple-system, sans-serif;
+}
+#avatar-container {
+  width: 100%;
+  height: 100%;
+  position: relative;
+}
+canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+#simli-video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: none;
+  position: absolute;
+  top: 0;
+  left: 0;
+}
+#name-tag {
+  position: absolute;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(0,0,0,0.6);
+  color: #fff;
+  padding: 6px 20px;
+  border-radius: 16px;
+  font-size: 14px;
+  font-weight: 500;
+  letter-spacing: 0.3px;
+}
+#status {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  color: rgba(255,255,255,0.4);
+  font-size: 11px;
+}
+</style>
+</head>
+<body>
+<div id="avatar-container">
+  <canvas id="face"></canvas>
+  <video id="simli-video" autoplay playsinline></video>
+  <audio id="simli-audio" autoplay></audio>
+  <div id="name-tag">Sam</div>
+  <div id="status">Connecting...</div>
+</div>
+
+<script>
+(function() {
+  var canvas = document.getElementById('face');
+  var ctx = canvas.getContext('2d');
+  var statusEl = document.getElementById('status');
+  var simliVideo = document.getElementById('simli-video');
+  var audioCtx = null;
+  var analyser = null;
+  var mouthOpenness = 0;
+  var targetMouth = 0;
+  var blinkTimer = 0;
+  var isBlinking = false;
+  var eyeOpenness = 1;
+  var isSpeaking = false;
+  var useSimli = false;
+  var ws = null;
+
+  function resize() {
+    canvas.width = canvas.clientWidth * (window.devicePixelRatio || 1);
+    canvas.height = canvas.clientHeight * (window.devicePixelRatio || 1);
+  }
+  resize();
+  window.addEventListener('resize', resize);
+
+  function drawFace() {
+    var w = canvas.width;
+    var h = canvas.height;
+    var cx = w / 2;
+    var cy = h / 2 - h * 0.05;
+    var faceR = Math.min(w, h) * 0.28;
+
+    ctx.clearRect(0, 0, w, h);
+
+    ctx.fillStyle = '#1a1a2e';
+    ctx.fillRect(0, 0, w, h);
+
+    var grd = ctx.createRadialGradient(cx, cy + faceR * 0.5, faceR * 0.1, cx, cy, faceR * 2);
+    grd.addColorStop(0, 'rgba(100, 120, 255, 0.08)');
+    grd.addColorStop(1, 'rgba(0, 0, 0, 0)');
+    ctx.fillStyle = grd;
+    ctx.fillRect(0, 0, w, h);
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(cx, cy, faceR, 0, Math.PI * 2);
+    ctx.fillStyle = '#e8c4a0';
+    ctx.fill();
+    ctx.strokeStyle = '#d4a574';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.restore();
+
+    var hairY = cy - faceR * 0.95;
+    ctx.save();
+    ctx.beginPath();
+    ctx.ellipse(cx, hairY, faceR * 1.05, faceR * 0.55, 0, Math.PI, 0);
+    ctx.fillStyle = '#3d2b1f';
+    ctx.fill();
+    ctx.restore();
+
+    var eyeY = cy - faceR * 0.12;
+    var eyeSpacing = faceR * 0.35;
+    var eyeW = faceR * 0.18;
+    var eyeH = faceR * 0.22 * eyeOpenness;
+
+    ctx.fillStyle = '#fff';
+    ctx.beginPath();
+    ctx.ellipse(cx - eyeSpacing, eyeY, eyeW, Math.max(1, eyeH), 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.ellipse(cx + eyeSpacing, eyeY, eyeW, Math.max(1, eyeH), 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    if (eyeOpenness > 0.2) {
+      var pupilR = faceR * 0.09;
+      ctx.fillStyle = '#2c1810';
+      ctx.beginPath();
+      ctx.arc(cx - eyeSpacing, eyeY, pupilR, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(cx + eyeSpacing, eyeY, pupilR, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = '#fff';
+      ctx.beginPath();
+      ctx.arc(cx - eyeSpacing - pupilR * 0.3, eyeY - pupilR * 0.3, pupilR * 0.3, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(cx + eyeSpacing - pupilR * 0.3, eyeY - pupilR * 0.3, pupilR * 0.3, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    ctx.strokeStyle = '#8b6914';
+    ctx.lineWidth = faceR * 0.04;
+    ctx.beginPath();
+    ctx.moveTo(cx - eyeSpacing - eyeW * 1.1, eyeY - eyeH * 0.8);
+    ctx.quadraticCurveTo(cx - eyeSpacing, eyeY - eyeH * 1.5, cx - eyeSpacing + eyeW * 1.1, eyeY - eyeH * 0.8);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(cx + eyeSpacing - eyeW * 1.1, eyeY - eyeH * 0.8);
+    ctx.quadraticCurveTo(cx + eyeSpacing, eyeY - eyeH * 1.5, cx + eyeSpacing + eyeW * 1.1, eyeY - eyeH * 0.8);
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.ellipse(cx, cy + faceR * 0.15, faceR * 0.08, faceR * 0.1, 0, 0, Math.PI * 2);
+    ctx.fillStyle = '#d4a574';
+    ctx.fill();
+
+    var mouthY = cy + faceR * 0.42;
+    var mouthW = faceR * 0.3;
+    var mouthH = faceR * 0.05 + (mouthOpenness * faceR * 0.2);
+
+    if (mouthOpenness > 0.05) {
+      ctx.beginPath();
+      ctx.ellipse(cx, mouthY, mouthW, mouthH, 0, 0, Math.PI * 2);
+      ctx.fillStyle = '#8b3a3a';
+      ctx.fill();
+      ctx.strokeStyle = '#c4836e';
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+
+      if (mouthH > faceR * 0.08) {
+        ctx.beginPath();
+        ctx.ellipse(cx, mouthY + mouthH * 0.3, mouthW * 0.5, mouthH * 0.25, 0, 0, Math.PI * 2);
+        ctx.fillStyle = '#d45a5a';
+        ctx.fill();
+      }
+    } else {
+      ctx.beginPath();
+      ctx.moveTo(cx - mouthW, mouthY);
+      ctx.quadraticCurveTo(cx, mouthY + faceR * 0.06, cx + mouthW, mouthY);
+      ctx.strokeStyle = '#c4836e';
+      ctx.lineWidth = 2.5;
+      ctx.stroke();
+    }
+
+    if (isSpeaking) {
+      var pulseR = faceR * 1.15 + Math.sin(Date.now() / 300) * faceR * 0.03;
+      ctx.beginPath();
+      ctx.arc(cx, cy, pulseR, 0, Math.PI * 2);
+      ctx.strokeStyle = 'rgba(100, 180, 255, 0.15)';
+      ctx.lineWidth = 3;
+      ctx.stroke();
+    }
+  }
+
+  function animate() {
+    mouthOpenness += (targetMouth - mouthOpenness) * 0.3;
+
+    blinkTimer += 16;
+    if (!isBlinking && blinkTimer > 3000 + Math.random() * 4000) {
+      isBlinking = true;
+      blinkTimer = 0;
+    }
+    if (isBlinking) {
+      if (blinkTimer < 80) {
+        eyeOpenness = Math.max(0, 1 - blinkTimer / 80);
+      } else if (blinkTimer < 160) {
+        eyeOpenness = Math.min(1, (blinkTimer - 80) / 80);
+      } else {
+        isBlinking = false;
+        eyeOpenness = 1;
+        blinkTimer = 0;
+      }
+    }
+
+    if (!useSimli) {
+      drawFace();
+    }
+    requestAnimationFrame(animate);
+  }
+  animate();
+
+  function connectWebSocket() {
+    var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    var url = proto + '//' + location.host + '/avatar-ws';
+    statusEl.textContent = 'Connecting...';
+
+    ws = new WebSocket(url);
+    ws.binaryType = 'arraybuffer';
+
+    ws.onopen = function() {
+      statusEl.textContent = 'Connected';
+    };
+
+    ws.onmessage = function(event) {
+      if (typeof event.data === 'string') {
+        var msg = JSON.parse(event.data);
+        if (msg.type === 'config') {
+          statusEl.textContent = 'Ready';
+          if (msg.simli_api_key && msg.simli_face_id) {
+            initSimli(msg.simli_api_key, msg.simli_face_id);
+          }
+        } else if (msg.type === 'stop') {
+          stopAudio();
+        }
+      } else {
+        handleAudioData(event.data);
+      }
+    };
+
+    ws.onclose = function() {
+      statusEl.textContent = 'Disconnected';
+      setTimeout(connectWebSocket, 2000);
+    };
+
+    ws.onerror = function() {
+      statusEl.textContent = 'Error';
+    };
+  }
+
+  function handleAudioData(mp3Buffer) {
+    if (!audioCtx) {
+      audioCtx = new AudioContext();
+      analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 256;
+      analyser.smoothingTimeConstant = 0.5;
+    }
+
+    audioCtx.decodeAudioData(mp3Buffer.slice(0), function(audioBuffer) {
+      var source = audioCtx.createBufferSource();
+      source.buffer = audioBuffer;
+
+      source.connect(analyser);
+      analyser.connect(audioCtx.destination);
+
+      isSpeaking = true;
+      source.start(0);
+
+      startMouthAnimation();
+
+      source.onended = function() {
+        isSpeaking = false;
+        targetMouth = 0;
+      };
+
+      if (useSimli && typeof sendToSimli === 'function') {
+        sendToSimli(audioBuffer);
+      }
+    }, function(err) {
+      console.error('Decode error:', err);
+    });
+  }
+
+  var mouthAnimFrame = null;
+  function startMouthAnimation() {
+    if (mouthAnimFrame) return;
+    var dataArray = new Uint8Array(analyser.frequencyBinCount);
+
+    function update() {
+      if (!isSpeaking) {
+        targetMouth = 0;
+        mouthAnimFrame = null;
+        return;
+      }
+      analyser.getByteFrequencyData(dataArray);
+      var sum = 0;
+      for (var i = 0; i < dataArray.length; i++) {
+        sum += dataArray[i];
+      }
+      var avg = sum / dataArray.length / 255;
+      targetMouth = Math.min(1, avg * 3);
+      mouthAnimFrame = requestAnimationFrame(update);
+    }
+    update();
+  }
+
+  function stopAudio() {
+    isSpeaking = false;
+    targetMouth = 0;
+    if (audioCtx) {
+      audioCtx.close().catch(function(){});
+      audioCtx = null;
+      analyser = null;
+    }
+    audioCtx = null;
+  }
+
+  function initSimli(apiKey, faceId) {
+    statusEl.textContent = 'Loading Simli...';
+    var script = document.createElement('script');
+    script.type = 'module';
+    script.textContent = `
+      try {
+        const { SimliClient } = await import('https://esm.sh/simli-client@latest');
+        const simliClient = new SimliClient();
+        simliClient.Initialize({
+          apiKey: "${apiKey}",
+          faceID: "${faceId}",
+          handleSilence: true,
+          videoRef: document.getElementById('simli-video'),
+          audioRef: document.getElementById('simli-audio'),
+        });
+        await simliClient.start();
+        document.getElementById('simli-video').style.display = 'block';
+        document.getElementById('face').style.display = 'none';
+        document.getElementById('status').textContent = 'Simli ready';
+        window.useSimli = true;
+        window.sendToSimli = function(audioBuffer) {
+          const pcm = audioBuffer.getChannelData(0);
+          const pcm16 = new Int16Array(pcm.length);
+          for (let i = 0; i < pcm.length; i++) {
+            pcm16[i] = Math.max(-32768, Math.min(32767, pcm[i] * 32768));
+          }
+          simliClient.sendAudioData(new Uint8Array(pcm16.buffer));
+        };
+      } catch(e) {
+        console.error('Simli init failed:', e);
+        document.getElementById('status').textContent = 'Simli failed, using basic avatar';
+      }
+    `;
+    document.body.appendChild(script);
+  }
+
+  connectWebSocket();
+})();
+</script>
+</body>
+</html>
