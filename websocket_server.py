@@ -418,29 +418,34 @@ class WebSocketServer:
             print(f"[{ts()}] 🎭 Avatar page disconnected")
         return ws
 
-    # ── Send audio to avatar page or fallback to Recall API ───────────────────
-    async def _deliver_audio(self, audio_bytes: bytes):
-        """Send audio to avatar page if connected, else inject via Recall API."""
-        if self._avatar_ws is not None and not self._avatar_ws.closed:
-            try:
-                await self._avatar_ws.send_bytes(audio_bytes)
-                print(f"[Speaker] Audio sent to avatar page ({len(audio_bytes)} bytes)")
-                return
-            except Exception as e:
-                print(f"[{ts()}] ⚠️  Avatar send failed: {e}, falling back to Recall API")
-
-        # Fallback: old Recall output_audio injection
+    # ── Deliver audio: always via Recall API (reliable), visual signals to avatar ─
+    async def _deliver_audio(self, audio_bytes: bytes, word_count: int = 0):
+        """
+        Audio goes via Recall's output_audio API (no jitter).
+        Avatar page receives only a 'speak' signal to animate the mouth.
+        """
+        # Always inject audio via Recall's native API
         b64 = base64.b64encode(audio_bytes).decode("utf-8")
         await self.speaker._inject_into_meeting(b64)
 
+        # Tell avatar page to start mouth animation (no audio data sent)
+        if self._avatar_ws is not None and not self._avatar_ws.closed:
+            try:
+                duration_ms = max(500, word_count * 300) if word_count > 0 else 2000
+                await self._avatar_ws.send_str(json.dumps({
+                    "type": "speak",
+                    "duration_ms": duration_ms,
+                }))
+            except Exception:
+                pass
+
     async def _stop_avatar_audio(self):
-        """Tell avatar page to stop playing audio."""
+        """Stop audio + tell avatar to stop animating."""
         if self._avatar_ws is not None and not self._avatar_ws.closed:
             try:
                 await self._avatar_ws.send_str(json.dumps({"type": "stop"}))
             except Exception:
                 pass
-        # Also try Recall API stop (works for both modes)
         await self.speaker.stop_audio()
 
     # ── Recall.ai WebSocket handler (unchanged) ──────────────────────────────
@@ -661,7 +666,7 @@ class WebSocketServer:
                 return
 
             t3 = time.time()
-            await self._deliver_audio(audio_bytes)
+            await self._deliver_audio(audio_bytes, word_count=word_count)
             self._audio_playing = True
             inject_ms = (time.time() - t3) * 1000
 
@@ -706,8 +711,8 @@ class WebSocketServer:
         try:
             voice_bytes = await self.speaker._synthesise(text)
             print(f"[{ts()}] _speak_response: TTS done — {len(voice_bytes)} bytes")
-            await self._deliver_audio(voice_bytes)
             word_count = len(text.split())
+            await self._deliver_audio(voice_bytes, word_count=word_count)
             self._interrupt_event.clear()
             try:
                 await asyncio.wait_for(
